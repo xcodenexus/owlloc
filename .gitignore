@@ -31,3 +31,6 @@ Desktop.ini
 
 # Logs / temp
 *.log
+
+# Claude Code project instructions
+CLAUDE.md
