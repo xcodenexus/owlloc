@@ -22,7 +22,7 @@ Spoof your iPhone's GPS location from Windows using a USB cable. No jailbreak re
 ## Installation
 
 ```bat
-git clone https://github.com/YOUR_USERNAME/owlloc.git
+git clone https://github.com/xcodenexus/owlloc.git
 cd owlloc
 pip install -r requirements.txt
 ```
