@@ -1,0 +1,5 @@
+PyQt6>=6.6.0
+PyQt6-WebEngine>=6.6.0
+PyQt6-sip>=13.6.0
+pymobiledevice3>=4.0.0
+requests>=2.28.0

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0a0a0f; overflow: hidden; }
+    #map { width: 100vw; height: 100vh; }
+
+    #search-box {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      gap: 6px;
+      background: rgba(10,10,15,0.85);
+      border: 1px solid rgba(255,149,0,0.25);
+      border-radius: 10px;
+      padding: 8px 10px;
+      backdrop-filter: blur(8px);
+      min-width: 340px;
+    }
+    #search-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #f0f0f0;
+      font-family: 'Segoe UI', sans-serif;
+      font-size: 13px;
+    }
+    #search-input::placeholder { color: #555566; }
+    #search-btn {
+      background: #ff9500;
+      color: #000;
+      border: none;
+      border-radius: 6px;
+      padding: 4px 14px;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    #search-btn:hover { background: #cc7700; }
+
+    #coords-overlay {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      background: rgba(10,10,15,0.85);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      padding: 7px 18px;
+      display: flex;
+      gap: 24px;
+      backdrop-filter: blur(8px);
+      font-family: Consolas, 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #888899;
+    }
+    #coords-overlay span b { color: #ff9500; }
+    #coords-overlay .val { color: #f0f0f0; }
+
+    /* Custom orange marker */
+    .owl-marker {
+      width: 28px;
+      height: 28px;
+      background: radial-gradient(circle at 40% 35%, #ffb347, #ff9500 60%, #cc7700);
+      border-radius: 50% 50% 50% 0;
+      transform: rotate(-45deg);
+      border: 2px solid rgba(255,255,255,0.3);
+      box-shadow: 0 2px 8px rgba(255,149,0,0.5);
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div id="search-box">
+    <input id="search-input" type="text" placeholder="Search place or paste coordinates (lat, lng)..." />
+    <button id="search-btn">GO</button>
+  </div>
+
+  <div id="coords-overlay">
+    <span><b>LAT</b> <span class="val" id="lat-val">—</span></span>
+    <span><b>LNG</b> <span class="val" id="lng-val">—</span></span>
+  </div>
+
+  <script>
+    // 1. Initialize map
+    const map = L.map('map', {
+      center: [6.5244, 3.3792],
+      zoom: 13,
+      zoomControl: false
+    });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19
+    }).addTo(map);
+
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    // 2. QWebChannel bridge
+    let bridge = null;
+    if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {
+      new QWebChannel(qt.webChannelTransport, function(channel) {
+        bridge = channel.objects.bridge;
+      });
+    }
+
+    // 3. Custom marker icon
+    function makeIcon() {
+      return L.divIcon({
+        className: '',
+        html: '<div class="owl-marker"></div>',
+        iconSize: [28, 28],
+        iconAnchor: [8, 28],
+        popupAnchor: [6, -28]
+      });
+    }
+
+    let currentMarker = null;
+
+    function setMarker(lat, lng) {
+      if (currentMarker) map.removeLayer(currentMarker);
+      currentMarker = L.marker([lat, lng], { icon: makeIcon() }).addTo(map);
+      document.getElementById('lat-val').textContent = parseFloat(lat).toFixed(6);
+      document.getElementById('lng-val').textContent = parseFloat(lng).toFixed(6);
+    }
+
+    function flyToLocation(lat, lng, zoom) {
+      map.flyTo([lat, lng], zoom || 15, { duration: 1.2 });
+      setMarker(lat, lng);
+    }
+
+    // 4. Map click handler
+    map.on('click', function(e) {
+      const { lat, lng } = e.latlng;
+      setMarker(lat, lng);
+      if (bridge) bridge.onLocationSelected(lat, lng);
+    });
+
+    // 5. Search (Nominatim geocoding)
+    document.getElementById('search-btn').addEventListener('click', doSearch);
+    document.getElementById('search-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') doSearch();
+    });
+
+    async function doSearch() {
+      const q = document.getElementById('search-input').value.trim();
+      if (!q) return;
+
+      // Check if coordinates
+      const m = q.match(/^(-?\d+\.?\d*)[,\s]+(-?\d+\.?\d*)$/);
+      if (m) {
+        flyToLocation(parseFloat(m[1]), parseFloat(m[2]));
+        if (bridge) bridge.onLocationSelected(parseFloat(m[1]), parseFloat(m[2]));
+        return;
+      }
+
+      // Geocode via Nominatim
+      try {
+        document.getElementById('search-btn').textContent = '...';
+        const r = await fetch(
+          'https://nominatim.openstreetmap.org/search?format=json&q=' +
+          encodeURIComponent(q) + '&limit=1',
+          { headers: { 'Accept-Language': 'en' } }
+        );
+        const data = await r.json();
+        if (data.length) {
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          flyToLocation(lat, lng);
+          if (bridge) bridge.onLocationSelected(lat, lng);
+        }
+      } catch(err) {
+        console.error('Search failed:', err);
+      } finally {
+        document.getElementById('search-btn').textContent = 'GO';
+      }
+    }
+
+    // 6. Route display + animation
+    let routeMarkers = [], routeLine = null;
+
+    function showRoute(points) {
+      clearRoute();
+      if (!points || !points.length) return;
+      const ll = points.map(function(p) { return [p.lat, p.lng]; });
+      routeLine = L.polyline(ll, {
+        color: '#ff9500',
+        weight: 3,
+        dashArray: '8,6',
+        opacity: 0.85
+      }).addTo(map);
+      map.fitBounds(routeLine.getBounds(), { padding: [50, 50] });
+
+      // Start/end markers
+      const startIcon = L.divIcon({
+        className: '',
+        html: '<div style="width:12px;height:12px;background:#34c759;border-radius:50%;border:2px solid #fff;"></div>',
+        iconSize: [12, 12], iconAnchor: [6, 6]
+      });
+      const endIcon = L.divIcon({
+        className: '',
+        html: '<div style="width:12px;height:12px;background:#ff3b30;border-radius:50%;border:2px solid #fff;"></div>',
+        iconSize: [12, 12], iconAnchor: [6, 6]
+      });
+      routeMarkers.push(L.marker(ll[0], { icon: startIcon }).addTo(map));
+      routeMarkers.push(L.marker(ll[ll.length - 1], { icon: endIcon }).addTo(map));
+    }
+
+    function clearRoute() {
+      routeMarkers.forEach(function(m) { map.removeLayer(m); });
+      routeMarkers = [];
+      if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    }
+
+    function animateRouteStep(lat, lng) {
+      setMarker(lat, lng);
+      map.panTo([lat, lng], { animate: true, duration: 0.3 });
+    }
+
+    // Expose API for Python
+    window.mapAPI = {
+      flyToLocation: flyToLocation,
+      setMarker: setMarker,
+      showRoute: showRoute,
+      clearRoute: clearRoute,
+      animateRouteStep: animateRouteStep
+    };
+  </script>
+</body>
+</html>
